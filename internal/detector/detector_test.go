@@ -94,3 +94,38 @@ func TestDetect_FilenameIsPreserved(t *testing.T) {
 		t.Errorf("filename not preserved: got %q, want %q", doc.Filename, "my_document.txt")
 	}
 }
+
+// TestDetect_Legislation verifies that Kenyan Acts and Statutes are
+// identified as TypeLegislation, and — critically — not misclassified
+// as TypeCBKCircular due to shared vocabulary ("Central Bank of Kenya",
+// "Banking Act" both cite the Act and the circular that implements it).
+func TestDetect_Legislation(t *testing.T) {
+	text := loadTestData(t, "sample_act.txt")
+	doc := detector.Detect("sample_act.txt", text)
+
+	if doc.Type != models.TypeLegislation {
+		t.Errorf("Detect(sample_act.txt): got type %q, want %q", doc.Type, models.TypeLegislation)
+	}
+	if doc.Filename != "sample_act.txt" {
+		t.Errorf("Detect(sample_act.txt): got filename %q, want %q", doc.Filename, "sample_act.txt")
+	}
+	if doc.RawText != text {
+		t.Error("Detect(sample_act.txt): RawText was not preserved")
+	}
+}
+
+// TestDetect_LegislationNotConfusedWithCBKCircular verifies the actual
+// CBK Act PDF — which shares "Central Bank of Kenya" and "Banking Act"
+// vocabulary with regulatory circulars — is still correctly identified
+// as TypeLegislation. This is the precision problem identified in the
+// PDF extraction work: a circular cites the Act it implements, but
+// only the Act itself contains statutory structural markers like
+// "Cap.", "Short title", and "An Act of Parliament".
+func TestDetect_LegislationNotConfusedWithCBKCircular(t *testing.T) {
+	text := loadTestData(t, "cbk_act_cap491.txt")
+	doc := detector.Detect("cbk_act_cap491.txt", text)
+
+	if doc.Type != models.TypeLegislation {
+		t.Errorf("Detect(cbk_act_cap491.txt): got type %q, want %q — the Act was misclassified as a circular or left unknown", doc.Type, models.TypeLegislation)
+	}
+}
