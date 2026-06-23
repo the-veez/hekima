@@ -18,9 +18,20 @@ import (
 // phrases appear in the text. The type with the highest score wins.
 //
 // A minimum score of 2 is required — this prevents a single accidental
-// word match from mislabeling a document. Ties are broken in favour of
-// the type with more total signatures matched; if scores are equal,
-// TypeUnknown is returned to avoid a false-confident assignment.
+// word match from mislabeling a document. Ties return TypeUnknown to
+// avoid a false-confident assignment.
+//
+// TypeLegislation and TypeCBKCircular share vocabulary ("Central Bank
+// of Kenya", "Banking Act") because circulars cite the Act they
+// implement. They are disambiguated by score, not by check order —
+// signatures is a map, and Go map iteration order is randomized, so
+// nothing here may rely on one type being scored before another.
+// TypeLegislation's signatures ("Cap.", "Laws of Kenya", "An Act of
+// Parliament", "PRELIMINARY", "Short title", "Interpretation") are
+// statutory structural markers that a circular never contains, so a
+// real Act scores high on TypeLegislation and low (typically 1, just
+// "Central Bank of Kenya") on TypeCBKCircular — well under the
+// tie-breaking threshold.
 func Detect(filename, text string) models.Document {
 	doc := models.Document{
 		RawText:  text,
@@ -28,10 +39,26 @@ func Detect(filename, text string) models.Document {
 		Type:     models.TypeUnknown,
 	}
 
-	// Signature phrases are lexical fingerprints for each document type.
-	// Chosen because they appear in these document classes and almost
-	// nowhere else in Kenyan document corpora.
 	signatures := map[models.DocumentType][]string{
+		// Legislation signatures are highly specific statutory phrases that
+		// appear in Acts and Statutes but never in circulars or policies.
+		// "Cap." is the Kenya statute citation format (e.g. Cap. 491).
+		// "Laws of Kenya" appears on the cover of every revised statute.
+		// "An Act of Parliament" is the opening recital of every Kenyan Act.
+		// "PRELIMINARY" appears as the title of Part I in virtually every Act.
+		// "Short title" is section 1 of every Kenyan Act without exception.
+		// "Interpretation" is section 2 of virtually every Kenyan Act.
+		models.TypeLegislation: {
+			"Laws of Kenya",
+			"An Act of Parliament",
+			"Cap.",
+			"Short title",
+			"Interpretation",
+			"PRELIMINARY",
+		},
+		// CBK circular signatures: regulatory directives issued by CBK.
+		// These phrases appear in circulars but not in the Acts themselves —
+		// circulars cite the Act but do not contain its structural recitals.
 		models.TypeCBKCircular: {
 			"Central Bank of Kenya",
 			"Governor",
@@ -82,12 +109,10 @@ func Detect(filename, text string) models.Document {
 			bestMatch = docType
 			tiedScore = false
 		} else if score == bestScore && score > 0 {
-			// Two types matched with equal confidence — not safe to assign either.
 			tiedScore = true
 		}
 	}
 
-	// Require at least 2 signature matches and no tie between types.
 	if bestScore >= 2 && !tiedScore {
 		doc.Type = bestMatch
 	}

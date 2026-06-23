@@ -22,6 +22,7 @@ const (
 	TypeCBKCircular   DocumentType = "cbk_circular"
 	TypeLandTitle     DocumentType = "land_title"
 	TypeCourtJudgment DocumentType = "court_judgment"
+	TypeLegislation   DocumentType = "legislation"
 	TypeUnknown       DocumentType = "unknown"
 )
 
