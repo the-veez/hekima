@@ -36,11 +36,15 @@ type Document struct {
 // Chunk is one semantically complete piece of a document.
 // It carries the text and enough metadata for an AI retrieval system
 // to understand where this chunk came from and what it means.
+//
+// TokenCount is always populated (no omitempty) so downstream consumers
+// can rely on it being present without a nil/zero check meaning "unknown".
 type Chunk struct {
-	ID       int               `json:"id"`
-	Text     string            `json:"text"`
-	Section  string            `json:"section"`
-	DocType  string            `json:"doc_type"`
-	Filename string            `json:"filename"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	ID         int               `json:"id"`
+	Text       string            `json:"text"`
+	Section    string            `json:"section"`
+	DocType    string            `json:"doc_type"`
+	Filename   string            `json:"filename"`
+	TokenCount int               `json:"token_count"`
+	Metadata   map[string]string `json:"metadata,omitempty"`
 }
