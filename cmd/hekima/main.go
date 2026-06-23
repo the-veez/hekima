@@ -2,64 +2,111 @@
 //
 // Usage:
 //
-//	hekima <document.txt>                 Print chunks to stdout
-//	hekima <document.txt> --json          Output as JSON array to stdout
-//	hekima <document.txt> --output file   Write JSON chunks to file
+//	hekima <document.txt>              Print chunks to stdout
+//	hekima <document.txt> --json       Output as JSON array to stdout
+//	hekima <document.txt> --output f   Write JSON chunks to file f
 package main
 
 import (
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/the-veez/hekima/internal/chunker"
 	"github.com/the-veez/hekima/internal/detector"
 )
 
+// maxInputBytes is the maximum file size Hekima will load into memory.
+// Documents larger than this are almost certainly not single policy or
+// regulatory files — they are corpora or concatenated inputs that should
+// be pre-split before being passed to Hekima.
+const maxInputBytes = 10 * 1024 * 1024 // 10 MB
+
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "hekima: %v\n", err)
 		os.Exit(1)
 	}
-
-	filepath := os.Args[1]
-	flags := parseFlags(os.Args[2:])
-
-	// Read the document
-	content, err := os.ReadFile(filepath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Step 1: Detect document type
-	doc := detector.Detect(filepath, string(content))
-
-	// Step 2: Chunk intelligently
-	chunks := chunker.Split(doc)
-
-	// Step 3: Output
-	if outputFile, ok := flags["output"]; ok {
-		if err := writeJSON(outputFile, chunks); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing output: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("✓ Wrote %d chunks to %s\n", len(chunks), outputFile)
-		return
-	}
-
-	if _, ok := flags["json"]; ok {
-		printJSON(chunks)
-		return
-	}
-
-	// Default: human-readable output
-	printHuman(doc, chunks)
 }
 
-// printHuman prints a readable summary useful during development
-// to quickly see whether chunking is working correctly.
+// run is the real entrypoint. Separating it from main() makes error
+// handling clean and makes the CLI testable without os.Exit.
+func run(args []string) error {
+	fs := flag.NewFlagSet("hekima", flag.ContinueOnError)
+	fs.Usage = printUsage
+
+	jsonOut := fs.Bool("json", false, "Output chunks as JSON array to stdout")
+	outputFile := fs.String("output", "", "Write JSON chunks to this file path")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if fs.NArg() < 1 {
+		printUsage()
+		return fmt.Errorf("no input file specified")
+	}
+
+	filepath := fs.Arg(0)
+
+	// Enforce file size limit before reading.
+	info, err := os.Stat(filepath)
+	if err != nil {
+		return fmt.Errorf("cannot access file %q: %w", filepath, err)
+	}
+	if info.Size() > maxInputBytes {
+		return fmt.Errorf(
+			"file %q is %d bytes, which exceeds the %d byte limit: pre-split large documents before passing to hekima",
+			filepath, info.Size(), maxInputBytes,
+		)
+	}
+
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		return fmt.Errorf("cannot read file %q: %w", filepath, err)
+	}
+
+	// Step 1: Detect document type.
+	doc := detector.Detect(filepath, string(content))
+
+	// Step 2: Chunk intelligently. Surface detection failures to the caller.
+	chunks, err := chunker.Split(doc)
+	if err != nil {
+		if errors.Is(err, chunker.ErrUnknownDocType) {
+			return fmt.Errorf(
+				"could not identify document type for %q — "+
+					"Hekima supports: cbk_circular, sacco_policy, court_judgment, land_title. "+
+					"Check that the document is one of these types and contains the expected structural markers",
+				filepath,
+			)
+		}
+		return fmt.Errorf("chunking failed: %w", err)
+	}
+
+	if len(chunks) == 0 {
+		return fmt.Errorf("document %q produced zero chunks: the file may be empty or contain only whitespace", filepath)
+	}
+
+	// Step 3: Output.
+	switch {
+	case *outputFile != "":
+		if err := writeJSON(*outputFile, chunks); err != nil {
+			return fmt.Errorf("cannot write output file: %w", err)
+		}
+		fmt.Printf("✓ Wrote %d chunks to %s\n", len(chunks), *outputFile)
+
+	case *jsonOut:
+		return printJSON(chunks)
+
+	default:
+		printHuman(doc, chunks)
+	}
+
+	return nil
+}
+
 func printHuman(doc detector.Document, chunks []chunker.Chunk) {
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("  HEKIMA — Document Analysis\n")
@@ -76,61 +123,44 @@ func printHuman(doc detector.Document, chunks []chunker.Chunk) {
 	}
 }
 
-// printJSON outputs chunks as a JSON array to stdout.
-func printJSON(chunks []chunker.Chunk) {
+func printJSON(chunks []chunker.Chunk) error {
 	out, err := json.MarshalIndent(chunks, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling JSON: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("JSON serialization failed: %w", err)
 	}
 	fmt.Println(string(out))
+	return nil
 }
 
-// writeJSON writes chunks to a JSON file.
 func writeJSON(filename string, chunks []chunker.Chunk) error {
 	out, err := json.MarshalIndent(chunks, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, out, 0644)
-}
-
-// parseFlags parses simple --key or --key value flags from args.
-func parseFlags(args []string) map[string]string {
-	flags := make(map[string]string)
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if strings.HasPrefix(arg, "--") {
-			key := strings.TrimPrefix(arg, "--")
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
-				flags[key] = args[i+1]
-				i++
-			} else {
-				flags[key] = "true"
-			}
-		}
-	}
-	return flags
+	// 0600: owner read/write only. Chunk data may contain sensitive
+	// financial or legal content from the source documents.
+	return os.WriteFile(filename, out, 0600)
 }
 
 func printUsage() {
-	fmt.Println(`
+	fmt.Fprint(os.Stderr, `
 Hekima — Domain-specific document chunker for East African AI systems
 
 Usage:
-  hekima <document.txt>                    Human-readable output
-  hekima <document.txt> --json             JSON array to stdout
-  hekima <document.txt> --output out.json  Write JSON to file
+  hekima <document>                        Human-readable chunk output
+  hekima <document> --json                 JSON array to stdout
+  hekima <document> --output out.json      Write JSON to file
 
 Supported document types:
   cbk_circular     Central Bank of Kenya circulars
   sacco_policy     SACCO loan and operational policies
   court_judgment   Kenyan court judgments and rulings
-  unknown          Unrecognized (paragraph fallback)
+  land_title       Land registration documents
 
 Examples:
   hekima testdata/sacco_policy.txt
   hekima testdata/cbk_circular.txt --json
   hekima testdata/court_judgment.txt --output chunks.json
+
 `)
 }
