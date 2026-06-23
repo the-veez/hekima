@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/the-veez/hekima/internal/models"
+	"github.com/the-veez/hekima/internal/tokenizer"
 )
 
 // ErrUnknownDocType is returned when the document type could not be
@@ -27,97 +28,142 @@ var ErrUnknownDocType = errors.New("document type is unknown: detection failed o
 
 const minChunkLength = 50
 
+// Options controls optional behaviours of SplitWithOptions.
+// The zero value is safe: no overlap, whitespace-based token counting.
+type Options struct {
+	// OverlapWords is the number of words to repeat at the start of each
+	// chunk from the end of the previous chunk. Overlap preserves sentence
+	// context that would otherwise be severed at a chunk boundary — a
+	// clause that begins in chunk N and concludes in chunk N+1 remains
+	// readable in both.
+	//
+	// Word boundaries are used (not BPE tokens) because the overlap
+	// extraction iterates the previous chunk's text directly. For typical
+	// East African regulatory prose, the difference from exact BPE-token
+	// overlap is negligible.
+	//
+	// 0 disables overlap. Negative values are treated as 0.
+	OverlapWords int
+
+	// Tokenizer is used to populate TokenCount on every emitted chunk.
+	// If nil, WhitespaceTokenizer is used (word count × 1.3, rounded up).
+	// Swap in a BPETokenizer for exact counts when poppler-utils and
+	// network access are available.
+	Tokenizer tokenizer.Tokenizer
+}
+
 // partHeader matches Kenyan legislative Part headers in body text.
 // Patterns handled:
 //   - Part I – PRELIMINARY
 //   - Part VIA – REGULATIONS OF FOREIGN EXCHANGE DEALINGS
 //   - Part VIB – MORTGAGE FINANCING BUSINESS
-//
-// Roman numeral components: I, V, X, L, C, D, M (covers all Parts
-// found in Kenyan Acts). Compound suffixes A, B, C, D handle sub-Parts
-// introduced by amendment (Part VIA, VIB, VIC, VID in the CBK Act).
-// The separator is an em dash (–) or hyphen (-) with surrounding spaces.
 var partHeader = regexp.MustCompile(
 	`(?i)^Part\s+[IVXLCDM]+(A|B|C|D)?\s+[–-]\s+\S`,
 )
 
 // sectionHeader matches top-level section numbers in Kenyan legislation.
-// Patterns handled:
-//   - "1. Short title"         — pure integer section
-//   - "4A. Other objects"      — integer + uppercase letter(s) (amended section)
-//   - "33U. Disclosure..."     — two-digit integer + uppercase letter
-//   - "51B. Penalties..."      — two-digit integer + uppercase letter
-//
-// Explicitly excluded:
-//   - "(1)", "(a)", "(i)"      — subsections/paragraphs, stay inside parent chunk
-//   - "1.1 Requirement"        — decimal subsections (CBK circular style)
-//
-// The number must appear at the start of the trimmed line (after
-// TrimSpace) with no leading spaces — this distinguishes body section
-// headers from TOC entries which carry significant leading whitespace
-// before pdftotext strips them via TrimSpace in the chunker loop.
+// Patterns handled: "1. Short title", "4A. Other objects", "33U. Disclosure..."
+// Explicitly excluded: "(1)", "(a)", "(i)" subsections and "1.1" decimal subsections.
 var sectionHeader = regexp.MustCompile(
 	`^(\d+[A-Z]*)\.\s+\S`,
 )
 
-// Split routes a document to the correct splitting strategy based on
-// its detected type.
+// Split routes a document to the correct splitting strategy using default
+// options (no overlap, whitespace tokenizer). It exists so existing call
+// sites need no changes.
+func Split(doc models.Document) ([]models.Chunk, error) {
+	return SplitWithOptions(doc, Options{})
+}
+
+// SplitWithOptions routes a document to the correct splitting strategy
+// and applies the provided options (overlap, tokenizer).
 //
 // Returns ErrUnknownDocType if the document type is unknown.
-func Split(doc models.Document) ([]models.Chunk, error) {
+func SplitWithOptions(doc models.Document, opts Options) ([]models.Chunk, error) {
+	tok := resolveTokenizer(opts.Tokenizer)
+
+	var chunks []models.Chunk
 	switch doc.Type {
 	case models.TypeSACCOPolicy:
-		return splitByHeadings(doc), nil
+		chunks = splitByHeadings(doc, tok)
 	case models.TypeCBKCircular:
-		return splitByNumberedSections(doc), nil
+		chunks = splitByNumberedSections(doc, tok)
 	case models.TypeCourtJudgment:
-		return splitByCourtMarkers(doc), nil
+		chunks = splitByCourtMarkers(doc, tok)
 	case models.TypeLandTitle:
-		return splitByParagraphs(doc), nil
+		chunks = splitByParagraphs(doc, tok)
 	case models.TypeLegislation:
-		return splitLegislation(doc), nil
+		chunks = splitLegislation(doc, tok)
 	case models.TypeUnknown:
 		return nil, fmt.Errorf("%w: file=%q", ErrUnknownDocType, doc.Filename)
 	default:
 		return nil, fmt.Errorf("chunker: no splitting strategy registered for document type %q in file %q", doc.Type, doc.Filename)
 	}
+
+	if opts.OverlapWords > 0 && len(chunks) > 1 {
+		chunks = applyOverlap(chunks, opts.OverlapWords)
+	}
+	return chunks, nil
+}
+
+// resolveTokenizer returns opts.Tokenizer if set, otherwise the
+// zero-dependency WhitespaceTokenizer.
+func resolveTokenizer(tok tokenizer.Tokenizer) tokenizer.Tokenizer {
+	if tok != nil {
+		return tok
+	}
+	return tokenizer.WhitespaceTokenizer{}
+}
+
+// applyOverlap prepends the last n words of chunk[i-1] to chunk[i].
+// It is applied as a single post-processing pass after splitting so
+// the logic is written once and shared across all document types.
+//
+// IDs are reassigned after overlap so they remain sequential.
+// TokenCount is recalculated for each chunk after its text grows.
+func applyOverlap(chunks []models.Chunk, overlapWords int) []models.Chunk {
+	tok := tokenizer.WhitespaceTokenizer{}
+	result := make([]models.Chunk, len(chunks))
+	result[0] = chunks[0]
+
+	for i := 1; i < len(chunks); i++ {
+		tail := lastNWords(chunks[i-1].Text, overlapWords)
+		if tail != "" {
+			chunks[i].Text = tail + "\n" + chunks[i].Text
+			chunks[i].TokenCount = tok.Count(chunks[i].Text)
+		}
+		result[i] = chunks[i]
+	}
+	return result
+}
+
+// lastNWords returns the last n whitespace-separated words of text,
+// joined by single spaces. Returns empty string if text is empty or n <= 0.
+func lastNWords(text string, n int) string {
+	if n <= 0 || text == "" {
+		return ""
+	}
+	words := strings.Fields(text)
+	if len(words) <= n {
+		return text
+	}
+	return strings.Join(words[len(words)-n:], " ")
 }
 
 // splitLegislation chunks Kenyan Acts and Statutes by their structural
 // grammar: Parts and Sections.
 //
-// Pre-processing: the Table of Contents is stripped before chunking.
-// The TOC occupies the opening pages and contains the same Part and
-// Section patterns as the body, but every entry carries dot-leaders
-// ("......"). The body begins at the first Part header that has no
-// dot-leaders — that line is the true structural start of the Act.
+// TOC stripping: the Table of Contents is discarded before chunking.
+// The body begins at the first Part header with no dot-leaders.
 //
-// Chunking strategy after TOC removal:
-//   - Section headers create a new chunk boundary. This is the only
-//     boundary that reliably produces a non-empty chunk, because every
-//     section has body text under it before the next header.
-//   - Part headers update currentPart (stored in every subsequent
-//     chunk's Metadata["part"]) but do NOT reliably produce a
-//     standalone chunk of their own. In real Acts, a Part header is
-//     immediately followed by its first Section header with no body
-//     text in between ("Part II – ESTABLISHMENT..." then directly
-//     "3. Establishment of the Bank"), so accumulated text under the
-//     Part header is empty and buildChunk discards it via
-//     minChunkLength. This is intentional, not a bug: Part identity
-//     is fully preserved via Metadata["part"] on every section beneath
-//     it, and a RAG pipeline filtering or boosting by Part should read
-//     that field rather than expect a dedicated Part-only chunk. The
-//     rare exception is a Part with introductory prose before its
-//     first numbered section (e.g. Part VIC in the CBK Act) — that
-//     prose does form its own chunk, with Section equal to the Part
-//     header text.
-//   - Subsections (1), (2), (a), (i) accumulate inside their parent chunk.
-func splitLegislation(doc models.Document) []models.Chunk {
+// Part headers update currentPart but rarely produce a standalone chunk:
+// in real Acts a Part header is immediately followed by its first Section
+// header with no body text between them, so accumulated text is empty and
+// buildChunk discards it via minChunkLength. Part identity is preserved
+// via Metadata["part"] on every section beneath it.
+func splitLegislation(doc models.Document, tok tokenizer.Tokenizer) []models.Chunk {
 	lines := strings.Split(doc.RawText, "\n")
 
-	// Find the first body Part header — the line that matches a Part
-	// header pattern AND contains no dot-leaders. Everything before this
-	// line is preamble or TOC and is discarded.
 	bodyStart := 0
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -135,98 +181,71 @@ func splitLegislation(doc models.Document) []models.Chunk {
 
 	for _, line := range lines[bodyStart:] {
 		trimmed := strings.TrimSpace(line)
-
 		switch {
 		case isPartHeader(trimmed) && !isTOCLine(trimmed):
-			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, currentPart, doc); ok {
+			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, currentPart, doc, tok); ok {
 				chunks = append(chunks, chunk)
 				chunkID++
 			}
 			currentPart = trimmed
 			currentSection = trimmed
 			currentLines = []string{}
-
 		case isSectionHeader(trimmed) && !isTOCLine(trimmed):
-			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, currentPart, doc); ok {
+			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, currentPart, doc, tok); ok {
 				chunks = append(chunks, chunk)
 				chunkID++
 			}
 			currentSection = trimmed
 			currentLines = []string{}
-
 		default:
 			currentLines = append(currentLines, line)
 		}
 	}
-
-	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, currentPart, doc); ok {
+	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, currentPart, doc, tok); ok {
 		chunks = append(chunks, chunk)
 	}
-
 	return chunks
 }
 
-// isPartHeader returns true if the line is a legislative Part header.
-// Examples: "Part I – PRELIMINARY", "Part VIA – REGULATIONS OF FOREIGN EXCHANGE DEALINGS"
 func isPartHeader(line string) bool {
 	return partHeader.MatchString(line)
 }
 
-// isSectionHeader returns true if the line begins with a legislative
-// section number: integer, optionally followed by uppercase letters,
-// then a dot and a space.
-// Examples: "1. Short title", "4A. Other objects", "33U. Disclosure..."
-//
-// Note: repealed or spent sections (e.g. "33N. [Repealed by Act No. 9
-// of 1996, s. 13.]", "33O. [Spent]") are correctly matched here but
-// produce no output chunk — their accumulated body text is just the
-// bracketed notice, which falls under minChunkLength in buildChunk and
-// is discarded. There is no substantive legal content to retrieve
-// from a repealed section, so this is the desired outcome.
 func isSectionHeader(line string) bool {
 	return sectionHeader.MatchString(line)
 }
 
-// isTOCLine returns true if the line is a Table of Contents entry
-// rather than a body section header. TOC lines contain dot-leaders
-// after the section title: "1. Short title .................. 1"
-// We detect this by checking for a run of three or more consecutive
-// dots anywhere in the line.
+// isTOCLine returns true if the line is a Table of Contents entry.
+// TOC lines contain dot-leaders: "1. Short title .................. 1"
 func isTOCLine(line string) bool {
 	return strings.Contains(line, "...")
 }
 
 // buildChunk assembles a Chunk from accumulated lines.
-// Returns false if the resulting text is too short to be useful
-// (minChunkLength) — this is what causes most Part headers to be
-// absorbed into metadata rather than becoming their own chunk; see
-// splitLegislation's doc comment for why that's intentional.
-// For legislation chunks, the Part name is stored in Metadata so
-// retrieval systems can filter or boost by Part.
-func buildChunk(id int, lines []string, section, part string, doc models.Document) (models.Chunk, bool) {
+// Returns false if the resulting text is too short to be useful.
+// For legislation chunks, the Part name is stored in Metadata.
+func buildChunk(id int, lines []string, section, part string, doc models.Document, tok tokenizer.Tokenizer) (models.Chunk, bool) {
 	text := strings.TrimSpace(strings.Join(lines, "\n"))
 	if len(text) < minChunkLength {
 		return models.Chunk{}, false
 	}
-
 	metadata := map[string]string{
 		"part": part,
 	}
-
 	return models.Chunk{
-		ID:       id,
-		Text:     text,
-		Section:  section,
-		DocType:  string(doc.Type),
-		Filename: doc.Filename,
-		Metadata: metadata,
+		ID:         id,
+		Text:       text,
+		Section:    section,
+		DocType:    string(doc.Type),
+		Filename:   doc.Filename,
+		TokenCount: tok.Count(text),
+		Metadata:   metadata,
 	}, true
 }
 
 // splitByHeadings cuts at ALL-CAPS or Title Case headings.
-// Used for SACCO policies where sections are labeled like:
-// "ELIGIBILITY CRITERIA", "DEFAULT AND PENALTIES", etc.
-func splitByHeadings(doc models.Document) []models.Chunk {
+// Used for SACCO policies.
+func splitByHeadings(doc models.Document, tok tokenizer.Tokenizer) []models.Chunk {
 	var chunks []models.Chunk
 	lines := strings.Split(doc.RawText, "\n")
 	currentSection := "Introduction"
@@ -236,7 +255,7 @@ func splitByHeadings(doc models.Document) []models.Chunk {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if isHeading(trimmed) {
-			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc); ok {
+			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc, tok); ok {
 				chunks = append(chunks, chunk)
 				chunkID++
 			}
@@ -246,17 +265,15 @@ func splitByHeadings(doc models.Document) []models.Chunk {
 			currentLines = append(currentLines, line)
 		}
 	}
-	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc); ok {
+	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc, tok); ok {
 		chunks = append(chunks, chunk)
 	}
 	return chunks
 }
 
 // splitByNumberedSections cuts at top-level numbered section markers.
-// Used for CBK circulars: "1. Purpose", "2. Scope", "3. Requirements".
-// Subsections (3.1, 4.2) are intentionally excluded — they accumulate
-// inside their parent section chunk.
-func splitByNumberedSections(doc models.Document) []models.Chunk {
+// Used for CBK circulars. Subsections (3.1, 4.2) stay inside parent chunks.
+func splitByNumberedSections(doc models.Document, tok tokenizer.Tokenizer) []models.Chunk {
 	var chunks []models.Chunk
 	lines := strings.Split(doc.RawText, "\n")
 	currentSection := "Preamble"
@@ -266,7 +283,7 @@ func splitByNumberedSections(doc models.Document) []models.Chunk {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if isNumberedSection(trimmed) {
-			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc); ok {
+			if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc, tok); ok {
 				chunks = append(chunks, chunk)
 				chunkID++
 			}
@@ -276,19 +293,18 @@ func splitByNumberedSections(doc models.Document) []models.Chunk {
 			currentLines = append(currentLines, line)
 		}
 	}
-	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc); ok {
+	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc, tok); ok {
 		chunks = append(chunks, chunk)
 	}
 	return chunks
 }
 
 // splitByCourtMarkers cuts at recognized Kenyan court judgment markers.
-func splitByCourtMarkers(doc models.Document) []models.Chunk {
+func splitByCourtMarkers(doc models.Document, tok tokenizer.Tokenizer) []models.Chunk {
 	courtMarkers := []string{
 		"BACKGROUND", "FACTS", "ISSUES FOR DETERMINATION", "ISSUES",
 		"ANALYSIS", "FINDINGS", "DETERMINATION", "CONCLUSION", "ORDER", "COSTS",
 	}
-
 	var chunks []models.Chunk
 	lines := strings.Split(doc.RawText, "\n")
 	currentSection := "HEADER"
@@ -300,7 +316,7 @@ func splitByCourtMarkers(doc models.Document) []models.Chunk {
 		matched := false
 		for _, marker := range courtMarkers {
 			if upperLine == marker || strings.HasPrefix(upperLine, marker) {
-				if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc); ok {
+				if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc, tok); ok {
 					chunks = append(chunks, chunk)
 					chunkID++
 				}
@@ -314,33 +330,38 @@ func splitByCourtMarkers(doc models.Document) []models.Chunk {
 			currentLines = append(currentLines, line)
 		}
 	}
-	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc); ok {
+	if chunk, ok := buildChunk(chunkID, currentLines, currentSection, "", doc, tok); ok {
 		chunks = append(chunks, chunk)
 	}
 	return chunks
 }
 
 // splitByParagraphs splits on blank lines. Used for land titles.
-func splitByParagraphs(doc models.Document) []models.Chunk {
+// chunkID is a dedicated counter (not the paragraph slice index) so
+// IDs are always sequential even when short paragraphs are skipped.
+func splitByParagraphs(doc models.Document, tok tokenizer.Tokenizer) []models.Chunk {
 	var chunks []models.Chunk
 	paragraphs := strings.Split(doc.RawText, "\n\n")
-	for i, para := range paragraphs {
+	chunkID := 0
+	for _, para := range paragraphs {
 		trimmed := strings.TrimSpace(para)
 		if len(trimmed) >= minChunkLength {
 			chunks = append(chunks, models.Chunk{
-				ID:       i,
-				Text:     trimmed,
-				Section:  "Unknown",
-				DocType:  string(doc.Type),
-				Filename: doc.Filename,
+				ID:         chunkID,
+				Text:       trimmed,
+				Section:    "Unknown",
+				DocType:    string(doc.Type),
+				Filename:   doc.Filename,
+				TokenCount: tok.Count(trimmed),
+				Metadata:   map[string]string{},
 			})
+			chunkID++
 		}
 	}
 	return chunks
 }
 
 // isHeading returns true if a line looks like a SACCO policy heading.
-// Uses unicode-aware character classification for non-ASCII text.
 func isHeading(line string) bool {
 	if len(line) < 3 || len(line) > 80 {
 		return false
@@ -364,9 +385,8 @@ func isHeading(line string) bool {
 	return float64(upperCount)/float64(letterCount) >= 0.6
 }
 
-// isNumberedSection returns true if a line is a TOP-LEVEL CBK circular
-// section: single integer followed by dot-space. Subsections (3.1, 4.2)
-// are rejected — the digit after the dot excludes them.
+// isNumberedSection returns true if a line is a top-level CBK circular
+// section. Subsections (3.1, 4.2) are rejected.
 func isNumberedSection(line string) bool {
 	if len(line) < 4 {
 		return false
