@@ -1,0 +1,51 @@
+CENTRAL BANK OF KENYA
+Ref. No. CBK/DIR/DFR/2024/01
+Date: 15 March 2024
+
+TO: ALL INSTITUTIONS LICENSED UNDER THE BANKING ACT
+
+CIRCULAR ON DIGITAL CREDIT PROVIDER COMPLIANCE REQUIREMENTS
+
+Pursuant to the provisions of the Central Bank of Kenya Act (Cap 491) and the Banking Act
+(Cap 488), the Central Bank of Kenya hereby issues the following directive to all institutions.
+
+1. Purpose
+The purpose of this circular is to provide guidelines on compliance requirements for digital
+credit providers operating in Kenya. This circular supplements the Digital Credit Providers
+Regulations, 2022 and is effective immediately upon issuance.
+
+2. Scope
+This circular applies to all institutions licensed as Digital Credit Providers (DCPs) under
+the Central Bank of Kenya Act. It also applies to institutions that have applied for DCP
+licenses and are operating under transition provisions.
+
+3. Customer Data Protection Requirements
+3.1 All DCPs must implement end-to-end encryption for customer data at rest and in transit.
+3.2 Customer data must be stored within Kenya unless express written approval has been
+obtained from the Central Bank of Kenya.
+3.3 DCPs must appoint a dedicated Data Protection Officer within 60 days of receiving their license.
+3.4 Breach notification to the Central Bank of Kenya must occur within 24 hours of detection.
+
+4. Lending Conduct Requirements
+4.1 Total cost of credit must be disclosed to borrowers before loan disbursement.
+4.2 DCPs must not charge fees or penalties not disclosed in the loan agreement.
+4.3 Rollover of loans shall only be permitted once per loan cycle with explicit written consent.
+4.4 Debt collection practices must comply with the Consumer Protection Act.
+
+5. Reporting Requirements
+5.1 DCPs must submit monthly returns to the Central Bank of Kenya by the 15th of each month.
+5.2 Quarterly audited financial statements must be submitted within 45 days of each quarter end.
+5.3 Any material adverse development must be reported within 48 hours.
+
+6. Compliance Timeline
+All institutions must achieve full compliance within 90 days of the date of issuance.
+Institutions requiring an extension must apply in writing to the Director, Digital Financial
+Services, no later than 60 days from the date of this circular.
+
+7. Penalties for Non-Compliance
+Non-compliance with this circular may attract penalties as prescribed under Section 57 of
+the Banking Act, including suspension or revocation of the DCP license.
+
+Issued by authority of the Governor
+Central Bank of Kenya
+Nairobi, Kenya
