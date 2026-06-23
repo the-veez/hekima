@@ -186,27 +186,44 @@ func isHeading(line string) bool {
 	return float64(upperCount)/float64(letterCount) >= 0.6
 }
 
+// isNumberedSection returns true if a line is a TOP-LEVEL numbered section
+// header: "1. Title", "2. Title", etc.
+//
+// Subsection headers like "3.1 Requirement" and "4.2.1 Detail" are
+// intentionally excluded — they belong inside their parent section's chunk,
+// not as independent chunk boundaries. Splitting at subsections produces
+// chunks that are too small and lose the parent section context.
+//
+// Uses rune-based iteration to correctly handle non-ASCII characters.
 func isNumberedSection(line string) bool {
 	if len(line) < 4 {
 		return false
 	}
+
 	runes := []rune(line)
 	i := 0
-	hasDigit := false
-	for i < len(runes) {
-		ch := runes[i]
-		if unicode.IsDigit(ch) {
-			hasDigit = true
-			i++
-		} else if ch == '.' && hasDigit {
-			rest := strings.TrimSpace(string(runes[i+1:]))
-			if len(rest) > 1 {
-				return true
-			}
-			i++
-		} else {
-			break
-		}
+
+	// Consume the leading integer (one or more digits).
+	if !unicode.IsDigit(runes[i]) {
+		return false
 	}
-	return false
+	for i < len(runes) && unicode.IsDigit(runes[i]) {
+		i++
+	}
+
+	// Must be followed immediately by a dot.
+	if i >= len(runes) || runes[i] != '.' {
+		return false
+	}
+	i++ // consume the dot
+
+	// The character after the dot must be a space (top-level: "1. Title").
+	// If it is another digit, this is a subsection ("1.1 Detail") — reject it.
+	if i >= len(runes) || unicode.IsDigit(runes[i]) {
+		return false
+	}
+
+	// There must be meaningful content after the dot and space.
+	rest := strings.TrimSpace(string(runes[i:]))
+	return len(rest) > 1
 }
