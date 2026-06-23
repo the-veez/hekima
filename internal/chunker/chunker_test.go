@@ -352,3 +352,137 @@ func TestSplit_Legislation_TOCIsStripped(t *testing.T) {
 		}
 	}
 }
+
+// --- SplitWithOptions tests ---
+
+// TestSplitWithOptions_TokenCountIsAlwaysPopulated verifies that every
+// chunk carries a non-zero TokenCount when the document has real content.
+// A zero count for a non-empty chunk would silently break any downstream
+// pipeline that uses TokenCount to enforce context window limits.
+func TestSplitWithOptions_TokenCountIsAlwaysPopulated(t *testing.T) {
+	text := loadTestData(t, "cbk_circular.txt")
+	doc := makeDoc("cbk_circular.txt", models.TypeCBKCircular, text)
+	chunks, err := chunker.SplitWithOptions(doc, chunker.Options{})
+	if err != nil {
+		t.Fatalf("SplitWithOptions: unexpected error: %v", err)
+	}
+	if len(chunks) == 0 {
+		t.Fatal("SplitWithOptions: got 0 chunks")
+	}
+	for _, c := range chunks {
+		if c.TokenCount == 0 {
+			t.Errorf("chunk %d (%q): TokenCount is 0 for non-empty chunk (text length %d)", c.ID, c.Section, len(c.Text))
+		}
+	}
+}
+
+// TestSplitWithOptions_ZeroOverlapMatchesSplit verifies that
+// SplitWithOptions with a zero-value Options{} produces identical
+// output to Split — the thin wrapper contract must hold exactly.
+func TestSplitWithOptions_ZeroOverlapMatchesSplit(t *testing.T) {
+	text := loadTestData(t, "sacco_policy.txt")
+	doc := makeDoc("sacco_policy.txt", models.TypeSACCOPolicy, text)
+
+	baseline, err := chunker.Split(doc)
+	if err != nil {
+		t.Fatalf("Split: unexpected error: %v", err)
+	}
+	withOpts, err := chunker.SplitWithOptions(doc, chunker.Options{})
+	if err != nil {
+		t.Fatalf("SplitWithOptions: unexpected error: %v", err)
+	}
+	if len(baseline) != len(withOpts) {
+		t.Fatalf("chunk count mismatch: Split=%d SplitWithOptions=%d", len(baseline), len(withOpts))
+	}
+	for i := range baseline {
+		if baseline[i].Text != withOpts[i].Text {
+			t.Errorf("chunk %d text differs between Split and SplitWithOptions", i)
+		}
+		if baseline[i].Section != withOpts[i].Section {
+			t.Errorf("chunk %d section differs: Split=%q SplitWithOptions=%q", i, baseline[i].Section, withOpts[i].Section)
+		}
+	}
+}
+
+// TestSplitWithOptions_OverlapWordsPrependsContext verifies the core
+// overlap contract: the first N words of chunk[i].Text (after overlap)
+// must equal the last N words of chunk[i-1].Text (before overlap).
+//
+// This is tested against a CBK circular because its numbered sections
+// produce clean, predictable chunk boundaries.
+func TestSplitWithOptions_OverlapWordsPrependsContext(t *testing.T) {
+	text := loadTestData(t, "cbk_circular.txt")
+	doc := makeDoc("cbk_circular.txt", models.TypeCBKCircular, text)
+
+	const overlapWords = 10
+	chunks, err := chunker.SplitWithOptions(doc, chunker.Options{OverlapWords: overlapWords})
+	if err != nil {
+		t.Fatalf("SplitWithOptions: unexpected error: %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Fatal("need at least 2 chunks to test overlap")
+	}
+
+	// Get the baseline (no overlap) to extract the "previous chunk" tail.
+	baseline, _ := chunker.Split(doc)
+
+	for i := 1; i < len(chunks); i++ {
+		prevWords := strings.Fields(baseline[i-1].Text)
+		var wantTail []string
+		if len(prevWords) <= overlapWords {
+			wantTail = prevWords
+		} else {
+			wantTail = prevWords[len(prevWords)-overlapWords:]
+		}
+		wantPrefix := strings.Join(wantTail, " ")
+
+		got := strings.Fields(chunks[i].Text)
+		if len(got) < len(wantTail) {
+			t.Errorf("chunk %d: text too short to contain overlap prefix", i)
+			continue
+		}
+		gotPrefix := strings.Join(got[:len(wantTail)], " ")
+		if gotPrefix != wantPrefix {
+			t.Errorf("chunk %d: overlap prefix = %q, want %q", i, gotPrefix, wantPrefix)
+		}
+	}
+}
+
+// TestSplitWithOptions_OverlapDoesNotAffectFirstChunk verifies that
+// chunk 0 is never modified by the overlap pass — there is no previous
+// chunk to draw context from.
+func TestSplitWithOptions_OverlapDoesNotAffectFirstChunk(t *testing.T) {
+	text := loadTestData(t, "cbk_circular.txt")
+	doc := makeDoc("cbk_circular.txt", models.TypeCBKCircular, text)
+
+	baseline, _ := chunker.Split(doc)
+	withOverlap, err := chunker.SplitWithOptions(doc, chunker.Options{OverlapWords: 20})
+	if err != nil {
+		t.Fatalf("SplitWithOptions: unexpected error: %v", err)
+	}
+	if baseline[0].Text != withOverlap[0].Text {
+		t.Errorf("chunk 0 was modified by overlap pass: got %q, want %q", withOverlap[0].Text, baseline[0].Text)
+	}
+}
+
+// TestSplitWithOptions_NegativeOverlapTreatedAsZero verifies that a
+// negative OverlapWords value does not panic or produce garbage output.
+// The contract: negative values are treated as 0 (no overlap).
+func TestSplitWithOptions_NegativeOverlapTreatedAsZero(t *testing.T) {
+	text := loadTestData(t, "cbk_circular.txt")
+	doc := makeDoc("cbk_circular.txt", models.TypeCBKCircular, text)
+
+	baseline, _ := chunker.Split(doc)
+	withNegative, err := chunker.SplitWithOptions(doc, chunker.Options{OverlapWords: -5})
+	if err != nil {
+		t.Fatalf("SplitWithOptions: unexpected error: %v", err)
+	}
+	if len(baseline) != len(withNegative) {
+		t.Fatalf("negative OverlapWords changed chunk count: baseline=%d got=%d", len(baseline), len(withNegative))
+	}
+	for i := range baseline {
+		if baseline[i].Text != withNegative[i].Text {
+			t.Errorf("chunk %d: negative OverlapWords modified text", i)
+		}
+	}
+}
