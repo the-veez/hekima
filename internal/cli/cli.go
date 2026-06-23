@@ -11,10 +11,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/the-veez/hekima/internal/chunker"
 	"github.com/the-veez/hekima/internal/detector"
 	"github.com/the-veez/hekima/internal/models"
+	"github.com/the-veez/hekima/internal/pdf"
 )
 
 // maxInputBytes is the maximum file size Hekima will read into memory.
@@ -88,7 +90,19 @@ func Run(args []string) error {
 }
 
 // readFile enforces the size limit and reads the file content.
+// readFile reads a document into memory, routing PDF files through the
+// text extraction pipeline before returning raw text.
+// Enforces the size limit for plain text files; PDF files have their
+// own limit enforced inside the pdf package.
 func readFile(filepath string) ([]byte, error) {
+	if strings.HasSuffix(strings.ToLower(filepath), ".pdf") {
+		text, err := pdf.ExtractText(filepath)
+		if err != nil {
+			return nil, fmt.Errorf("PDF extraction failed: %w", err)
+		}
+		return []byte(text), nil
+	}
+
 	info, err := os.Stat(filepath)
 	if err != nil {
 		return nil, fmt.Errorf("cannot access file %q: %w", filepath, err)
@@ -106,7 +120,6 @@ func readFile(filepath string) ([]byte, error) {
 	}
 	return content, nil
 }
-
 func printHuman(doc models.Document, chunks []models.Chunk) {
 	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 	fmt.Printf("  HEKIMA — Document Analysis\n")
