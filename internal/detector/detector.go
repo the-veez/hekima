@@ -1,49 +1,38 @@
 // Package detector identifies the type of an East African document
-// by scanning for structural fingerprints unique to each document type.
+// by scanning for structural fingerprints unique to each document class.
 //
-// This is the first step in Hekima's pipeline — before we can chunk
-// intelligently, we need to know what kind of document we're dealing with.
-// A CBK circular and a SACCO policy are both text documents, but they
-// have completely different structural grammars.
+// Detection is deterministic and stateless: the same input always
+// produces the same output. There is no ML model — East African
+// regulatory documents have stable structural conventions that do not
+// require probabilistic classification.
 package detector
 
-import "strings"
+import (
+	"strings"
 
-// DocumentType is a named string type representing a known East African
-// document category. Using a named type (instead of plain string) means
-// the compiler will catch mistakes like passing the wrong kind of string.
-type DocumentType string
-
-const (
-	TypeSACCOPolicy   DocumentType = "sacco_policy"
-	TypeCBKCircular   DocumentType = "cbk_circular"
-	TypeLandTitle     DocumentType = "land_title"
-	TypeCourtJudgment DocumentType = "court_judgment"
-	TypeUnknown       DocumentType = "unknown"
+	"github.com/the-veez/hekima/internal/models"
 )
-
-// Document holds a raw document's content and its detected identity.
-// Every field is exported (capitalized) so other packages can read them.
-type Document struct {
-	RawText  string
-	Type     DocumentType
-	Filename string
-}
 
 // Detect reads raw text and returns a Document with its type identified.
 // It scores each document type by counting how many of its signature
 // phrases appear in the text. The type with the highest score wins.
 //
-// A minimum score of 2 is required to avoid false positives on partial matches.
-func Detect(filename, text string) Document {
-	doc := Document{
+// A minimum score of 2 is required — this prevents a single accidental
+// word match from mislabeling a document. Ties are broken in favour of
+// the type with more total signatures matched; if scores are equal,
+// TypeUnknown is returned to avoid a false-confident assignment.
+func Detect(filename, text string) models.Document {
+	doc := models.Document{
 		RawText:  text,
 		Filename: filename,
-		Type:     TypeUnknown,
+		Type:     models.TypeUnknown,
 	}
 
-	signatures := map[DocumentType][]string{
-		TypeCBKCircular: {
+	// Signature phrases are lexical fingerprints for each document type.
+	// Chosen because they appear in these document classes and almost
+	// nowhere else in Kenyan document corpora.
+	signatures := map[models.DocumentType][]string{
+		models.TypeCBKCircular: {
 			"Central Bank of Kenya",
 			"Governor",
 			"Ref. No. CBK",
@@ -51,7 +40,7 @@ func Detect(filename, text string) Document {
 			"Banking Act",
 			"all institutions",
 		},
-		TypeSACCOPolicy: {
+		models.TypeSACCOPolicy: {
 			"SACCO",
 			"loan policy",
 			"repayment period",
@@ -59,7 +48,7 @@ func Detect(filename, text string) Document {
 			"share capital",
 			"member",
 		},
-		TypeLandTitle: {
+		models.TypeLandTitle: {
 			"Land Registration Act",
 			"parcel number",
 			"Grant No",
@@ -67,7 +56,7 @@ func Detect(filename, text string) Document {
 			"freehold",
 			"leasehold",
 		},
-		TypeCourtJudgment: {
+		models.TypeCourtJudgment: {
 			"REPUBLIC OF KENYA",
 			"PETITIONER",
 			"RESPONDENT",
@@ -77,8 +66,9 @@ func Detect(filename, text string) Document {
 		},
 	}
 
-	bestMatch := TypeUnknown
+	bestMatch := models.TypeUnknown
 	bestScore := 0
+	tiedScore := false
 
 	for docType, phrases := range signatures {
 		score := 0
@@ -90,17 +80,22 @@ func Detect(filename, text string) Document {
 		if score > bestScore {
 			bestScore = score
 			bestMatch = docType
+			tiedScore = false
+		} else if score == bestScore && score > 0 {
+			// Two types matched with equal confidence — not safe to assign either.
+			tiedScore = true
 		}
 	}
 
-	if bestScore >= 2 {
+	// Require at least 2 signature matches and no tie between types.
+	if bestScore >= 2 && !tiedScore {
 		doc.Type = bestMatch
 	}
 
 	return doc
 }
 
-// containsPhrase checks whether a phrase exists anywhere in the text.
+// containsPhrase reports whether phrase exists anywhere in text.
 // Case-insensitive so "Central Bank of Kenya" matches "central bank of kenya".
 func containsPhrase(text, phrase string) bool {
 	return strings.Contains(
