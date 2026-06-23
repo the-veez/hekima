@@ -34,7 +34,11 @@ func Run(args []string) error {
 	jsonOut := fs.Bool("json", false, "Output chunks as JSON array to stdout")
 	outputFile := fs.String("output", "", "Write JSON chunks to this file path")
 
-	if err := fs.Parse(args); err != nil {
+	// stdlib flag.Parse stops scanning for flags at the first positional
+	// argument — "hekima file.pdf --json" would silently leave --json
+	// unparsed and fall through to human-readable output. reorderArgs
+	// partitions flags and positionals so order never matters.
+	if err := fs.Parse(reorderArgs(args)); err != nil {
 		return err
 	}
 
@@ -87,6 +91,47 @@ func Run(args []string) error {
 	}
 
 	return nil
+}
+
+// knownValueFlags lists flags that consume the following argument as
+// their value (e.g. "--output out.json"). Boolean flags like --json
+// do not consume a following argument and are omitted here.
+var knownValueFlags = map[string]bool{
+	"-output":  true,
+	"--output": true,
+}
+
+// reorderArgs partitions args into [flags..., positionals...] so that
+// flag.FlagSet.Parse sees every flag regardless of where the caller
+// placed it on the command line.
+//
+// stdlib flag.Parse stops looking for flags the moment it encounters
+// the first argument that doesn't start with "-": everything after
+// that point, flags included, is treated as a positional argument.
+// "hekima file.pdf --json" would therefore silently run in
+// human-readable mode instead of JSON mode — a sharp edge for a tool
+// whose primary consumers are scripts and pipelines. Reordering here
+// means flag position never matters.
+func reorderArgs(args []string) []string {
+	var flags, positionals []string
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+			// If this flag takes a value and it wasn't passed as
+			// --flag=value, the next token is that value, not a
+			// positional argument — consume it together.
+			if knownValueFlags[arg] && !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+
+	return append(flags, positionals...)
 }
 
 // readFile enforces the size limit and reads the file content.
