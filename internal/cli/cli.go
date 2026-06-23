@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -24,12 +25,20 @@ import (
 // must be pre-split before passing to Hekima.
 const maxInputBytes = 10 * 1024 * 1024 // 10 MB
 
-// Run is the single entry point called by main. It parses flags,
-// validates input, runs the pipeline, and writes output.
-// All errors are returned to main — nothing calls os.Exit from here.
+// Run is the single entry point called by main. It wires RunWithIO to
+// the process's real stdout and stderr. main.go calls only this.
 func Run(args []string) error {
+	return RunWithIO(args, os.Stdout, os.Stderr)
+}
+
+// RunWithIO is Run with the output streams injected, so tests can
+// capture exactly what Hekima would print without touching the
+// process-global os.Stdout/os.Stderr. Behaviour is otherwise
+// identical to Run — this is the function Run delegates to.
+func RunWithIO(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("hekima", flag.ContinueOnError)
-	fs.Usage = printUsage
+	fs.SetOutput(stderr)
+	fs.Usage = func() { printUsage(stderr) }
 
 	jsonOut := fs.Bool("json", false, "Output chunks as JSON array to stdout")
 	outputFile := fs.String("output", "", "Write JSON chunks to this file path")
@@ -43,7 +52,7 @@ func Run(args []string) error {
 	}
 
 	if fs.NArg() < 1 {
-		printUsage()
+		printUsage(stderr)
 		return fmt.Errorf("no input file specified")
 	}
 
@@ -81,13 +90,13 @@ func Run(args []string) error {
 		if err := writeJSON(*outputFile, chunks); err != nil {
 			return fmt.Errorf("cannot write output file: %w", err)
 		}
-		fmt.Printf("✓ Wrote %d chunks to %s\n", len(chunks), *outputFile)
+		fmt.Fprintf(stdout, "✓ Wrote %d chunks to %s\n", len(chunks), *outputFile)
 
 	case *jsonOut:
-		return printJSON(chunks)
+		return printJSON(stdout, chunks)
 
 	default:
-		printHuman(doc, chunks)
+		printHuman(stdout, doc, chunks)
 	}
 
 	return nil
@@ -165,28 +174,28 @@ func readFile(filepath string) ([]byte, error) {
 	}
 	return content, nil
 }
-func printHuman(doc models.Document, chunks []models.Chunk) {
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Printf("  HEKIMA — Document Analysis\n")
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Printf("  File     : %s\n", doc.Filename)
-	fmt.Printf("  Type     : %s\n", doc.Type)
-	fmt.Printf("  Chunks   : %d\n", len(chunks))
-	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+func printHuman(w io.Writer, doc models.Document, chunks []models.Chunk) {
+	fmt.Fprintf(w, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(w, "  HEKIMA — Document Analysis\n")
+	fmt.Fprintf(w, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(w, "  File     : %s\n", doc.Filename)
+	fmt.Fprintf(w, "  Type     : %s\n", doc.Type)
+	fmt.Fprintf(w, "  Chunks   : %d\n", len(chunks))
+	fmt.Fprintf(w, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	for _, chunk := range chunks {
-		fmt.Printf("[ Chunk %d | Section: %s ]\n", chunk.ID, chunk.Section)
-		fmt.Printf("%s\n", chunk.Text)
-		fmt.Printf("\n──────────────────────────────────────────\n\n")
+		fmt.Fprintf(w, "[ Chunk %d | Section: %s ]\n", chunk.ID, chunk.Section)
+		fmt.Fprintf(w, "%s\n", chunk.Text)
+		fmt.Fprintf(w, "\n──────────────────────────────────────────\n\n")
 	}
 }
 
-func printJSON(chunks []models.Chunk) error {
+func printJSON(w io.Writer, chunks []models.Chunk) error {
 	out, err := json.MarshalIndent(chunks, "", "  ")
 	if err != nil {
 		return fmt.Errorf("JSON serialization failed: %w", err)
 	}
-	fmt.Println(string(out))
+	fmt.Fprintln(w, string(out))
 	return nil
 }
 
@@ -200,8 +209,8 @@ func writeJSON(filename string, chunks []models.Chunk) error {
 	return os.WriteFile(filename, out, 0600)
 }
 
-func printUsage() {
-	fmt.Fprint(os.Stderr, `
+func printUsage(w io.Writer) {
+	fmt.Fprint(w, `
 Hekima — Domain-specific document chunker for East African AI systems
 
 Usage:
