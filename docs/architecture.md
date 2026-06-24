@@ -65,6 +65,32 @@ unchanged.
 Every emitted `Chunk` carries `TokenCount` (no `omitempty`) so downstream consumers
 can rely on its presence without treating zero as "unknown".
 
+## HTTP Server Mode
+
+Start the server:
+  hekima --serve
+  hekima --serve --port 9090
+
+Endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| POST | /chunk | Chunk a document — multipart/form-data with file and optional overlap_words |
+| GET | /health | Liveness check — returns {"status":"ok"} |
+
+Request fields:
+- `file` (required) — the document to chunk (.txt or .pdf, max 10 MB)
+- `overlap_words` (optional) — words to repeat at chunk boundaries (default 0)
+
+Response on success: 200 with a JSON array of Chunk objects.
+Response on unknown document type: 422 with {"error": "..."}
+Response on bad request: 400 with {"error": "..."}
+
+Example:
+  curl -X POST http://localhost:8080/chunk \
+    -F file=@cbk_circular.pdf \
+    -F overlap_words=20
+
 ## Roadmap
 
 | Priority | Feature | Status |
@@ -78,6 +104,6 @@ can rely on its presence without treating zero as "unknown".
 | P1 | Tests for pdf package | ✅ Done |
 | P1 | Tests for cli package | ✅ Done |
 | P1 | Embedding-ready output (token counts, overlap control) | ✅ Done |
-| P2 | HTTP server mode for pipeline integration | 🔲 Planned |
+| P2 | HTTP server mode for pipeline integration | ✅ Done |
 | P2 | Additional document types (NTSA forms, KRA notices) | 🔲 Planned |
 | P3 | WASM build for browser-side chunking | 🔲 Planned |
