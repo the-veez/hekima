@@ -36,8 +36,8 @@ const maxUploadBytes = 10 * 1024 * 1024 // 10 MB
 // It blocks until the server exits.
 func Run(addr string) error {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/chunk", handleChunk)
-	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/chunk", HandleChunk)
+	mux.HandleFunc("/health", HandleHealth)
 
 	log.Printf("hekima: listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
@@ -45,7 +45,7 @@ func Run(addr string) error {
 
 // handleHealth responds to GET /health with a simple liveness payload.
 // Used by load balancers, Docker health checks, and uptime monitors.
-func handleHealth(w http.ResponseWriter, r *http.Request) {
+func HandleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed — use GET /health")
 		return
@@ -63,7 +63,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 // Response on success: 200 with a JSON array of Chunk objects.
 // Response on unknown document type: 422 with a JSON error.
 // Response on all other errors: 400 or 500 with a JSON error.
-func handleChunk(w http.ResponseWriter, r *http.Request) {
+func HandleChunk(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed — use POST /chunk")
 		return
