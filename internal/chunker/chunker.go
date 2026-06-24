@@ -229,8 +229,9 @@ func buildChunk(id int, lines []string, section, part string, doc models.Documen
 	if len(text) < minChunkLength {
 		return models.Chunk{}, false
 	}
-	metadata := map[string]string{
-		"part": part,
+	metadata := map[string]string{}
+	if part != "" {
+		metadata["part"] = part
 	}
 	return models.Chunk{
 		ID:         id,
