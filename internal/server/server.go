@@ -24,6 +24,7 @@ import (
 
 	"github.com/the-veez/hekima/internal/chunker"
 	"github.com/the-veez/hekima/internal/detector"
+	"github.com/the-veez/hekima/internal/middleware"
 	"github.com/the-veez/hekima/internal/pdf"
 )
 
@@ -39,8 +40,14 @@ func Run(addr string) error {
 	mux.HandleFunc("/chunk", HandleChunk)
 	mux.HandleFunc("/health", HandleHealth)
 
+	// Apply middleware: rate limiter wraps the mux, logger wraps that.
+	// Order matters: logger runs first so it captures the real status
+	// code including 429s from the rate limiter.
+	// 10 requests per minute per IP (0.1667 rps), burst of 5.
+	handler := middleware.Logger(middleware.RateLimiter(10.0/60.0, 5)(mux))
+
 	log.Printf("hekima: listening on %s", addr)
-	return http.ListenAndServe(addr, mux)
+	return http.ListenAndServe(addr, handler)
 }
 
 // handleHealth responds to GET /health with a simple liveness payload.
