@@ -11,6 +11,7 @@
 package server
 
 import (
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,12 +34,16 @@ import (
 // enforced inside the pdf package.
 const maxUploadBytes = 10 * 1024 * 1024 // 10 MB
 
+//go:embed static/index.html
+var indexHTML []byte
+
 // Run starts the HTTP server on the given address (e.g. ":8080").
 // It blocks until the server exits.
 func Run(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/chunk", HandleChunk)
 	mux.HandleFunc("/health", HandleHealth)
+	mux.HandleFunc("/", HandleDemo)
 
 	// Apply middleware: rate limiter wraps the mux, logger wraps that.
 	// Order matters: logger runs first so it captures the real status
@@ -48,6 +53,23 @@ func Run(addr string) error {
 
 	log.Printf("hekima: listening on %s", addr)
 	return http.ListenAndServe(addr, handler)
+}
+
+// HandleDemo serves the web demo UI at GET /.
+// The HTML is embedded at compile time via go:embed — no static files
+// need to exist at runtime, and the Docker image stays a single binary.
+func HandleDemo(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(indexHTML)
 }
 
 // handleHealth responds to GET /health with a simple liveness payload.

@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hekima — East African Document Chunker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+
+    header {
+      border-bottom: 1px solid #1e2530;
+      padding: 1.25rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    header h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #f8fafc;
+      letter-spacing: -0.02em;
+    }
+
+    header .tagline {
+      font-size: 0.85rem;
+      color: #64748b;
+    }
+
+    .badge {
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: #1a3a2a;
+      color: #4ade80;
+      border: 1px solid #166534;
+      border-radius: 999px;
+      padding: 0.2rem 0.65rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    .upload-zone {
+      border: 2px dashed #2d3748;
+      border-radius: 12px;
+      padding: 3rem 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      background: #13181f;
+      margin-bottom: 1.5rem;
+    }
+
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: #4ade80;
+      background: #0d1f16;
+    }
+
+    .upload-zone input[type="file"] {
+      display: none;
+    }
+
+    .upload-icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .upload-zone p {
+      color: #94a3b8;
+      font-size: 0.95rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .upload-zone .hint {
+      font-size: 0.8rem;
+      color: #475569;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-end;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .field label {
+      font-size: 0.8rem;
+      color: #94a3b8;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .field input[type="number"] {
+      background: #13181f;
+      border: 1px solid #2d3748;
+      border-radius: 8px;
+      color: #e2e8f0;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.9rem;
+      width: 140px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .field input[type="number"]:focus {
+      border-color: #4ade80;
+    }
+
+    button#chunkBtn {
+      background: #16a34a;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.6rem 1.5rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      height: 38px;
+    }
+
+    button#chunkBtn:hover { background: #15803d; }
+    button#chunkBtn:disabled { background: #1e3a2a; color: #4b5563; cursor: not-allowed; }
+
+    .status-bar {
+      font-size: 0.85rem;
+      color: #64748b;
+      margin-bottom: 1.5rem;
+      min-height: 1.2rem;
+    }
+
+    .status-bar.error { color: #f87171; }
+    .status-bar.success { color: #4ade80; }
+
+    .summary {
+      display: flex;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .stat {
+      background: #13181f;
+      border: 1px solid #1e2530;
+      border-radius: 10px;
+      padding: 0.75rem 1.25rem;
+      min-width: 120px;
+    }
+
+    .stat .label {
+      font-size: 0.72rem;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.3rem;
+    }
+
+    .stat .value {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+
+    .stat .value.green { color: #4ade80; }
+
+    .chunks { display: flex; flex-direction: column; gap: 1rem; }
+
+    .chunk {
+      background: #13181f;
+      border: 1px solid #1e2530;
+      border-radius: 10px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+
+    .chunk:hover { border-color: #2d3748; }
+
+    .chunk-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.65rem 1rem;
+      background: #0f1117;
+      border-bottom: 1px solid #1e2530;
+      flex-wrap: wrap;
+    }
+
+    .chunk-id {
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: #475569;
+      min-width: 2rem;
+    }
+
+    .chunk-section {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #cbd5e1;
+      flex: 1;
+    }
+
+    .chunk-meta {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      border-radius: 999px;
+      padding: 0.18rem 0.6rem;
+      letter-spacing: 0.04em;
+    }
+
+    .tag.doc-type {
+      background: #1e3a5f;
+      color: #93c5fd;
+      border: 1px solid #1d4ed8;
+    }
+
+    .tag.tokens {
+      background: #1a1a2e;
+      color: #a78bfa;
+      border: 1px solid #4c1d95;
+    }
+
+    .tag.part {
+      background: #1a2e1e;
+      color: #86efac;
+      border: 1px solid #166534;
+    }
+
+    .chunk-text {
+      padding: 0.85rem 1rem;
+      font-size: 0.85rem;
+      line-height: 1.7;
+      color: #94a3b8;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .chunk-text::-webkit-scrollbar { width: 4px; }
+    .chunk-text::-webkit-scrollbar-track { background: transparent; }
+    .chunk-text::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+
+    #dropLabel { pointer-events: none; }
+
+    @media (max-width: 600px) {
+      main { padding: 1rem; }
+      header { padding: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Hekima</h1>
+  </div>
+  <span class="badge">East African AI</span>
+  <span class="tagline">Domain-specific document chunking</span>
+</header>
+
+<main>
+
+  <div class="upload-zone" id="dropZone">
+    <input type="file" id="fileInput" accept=".txt,.pdf" />
+    <div class="upload-icon">📄</div>
+    <p id="dropLabel">Drop a document here or <strong style="color:#4ade80;cursor:pointer" onclick="document.getElementById('fileInput').click()">browse</strong></p>
+    <p class="hint">Supports .txt and .pdf · CBK circulars, SACCO policies, court judgments, land titles, legislation</p>
+  </div>
+
+  <div class="controls">
+    <div class="field">
+      <label for="overlapWords">Overlap Words</label>
+      <input type="number" id="overlapWords" value="0" min="0" max="100" placeholder="0" />
+    </div>
+    <button id="chunkBtn" disabled>Chunk Document</button>
+  </div>
+
+  <div class="status-bar" id="statusBar"></div>
+
+  <div class="summary" id="summary" style="display:none">
+    <div class="stat">
+      <div class="label">Document Type</div>
+      <div class="value green" id="statDocType">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">Chunks</div>
+      <div class="value" id="statChunks">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">Total Tokens</div>
+      <div class="value" id="statTokens">—</div>
+    </div>
+    <div class="stat">
+      <div class="label">File</div>
+      <div class="value" id="statFile" style="font-size:0.9rem;word-break:break-all">—</div>
+    </div>
+  </div>
+
+  <div class="chunks" id="chunksContainer"></div>
+
+</main>
+
+<script>
+  const dropZone = document.getElementById("dropZone");
+  const fileInput = document.getElementById("fileInput");
+  const chunkBtn = document.getElementById("chunkBtn");
+  const statusBar = document.getElementById("statusBar");
+  const summary = document.getElementById("summary");
+  const chunksContainer = document.getElementById("chunksContainer");
+  const dropLabel = document.getElementById("dropLabel");
+
+  let selectedFile = null;
+
+  // --- file selection ---
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length > 0) selectFile(fileInput.files[0]);
+  });
+
+  dropZone.addEventListener("click", (e) => {
+    if (e.target.tagName !== "STRONG") fileInput.click();
+  });
+
+  dropZone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+
+  dropZone.addEventListener("dragleave", () => {
+    dropZone.classList.remove("drag-over");
+  });
+
+  dropZone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+    if (e.dataTransfer.files.length > 0) selectFile(e.dataTransfer.files[0]);
+  });
+
+  function selectFile(file) {
+    selectedFile = file;
+    dropLabel.innerHTML = "<strong style=\"color:#4ade80\">" + file.name + "</strong> selected";
+    chunkBtn.disabled = false;
+    setStatus("", "");
+    summary.style.display = "none";
+    chunksContainer.innerHTML = "";
+  }
+
+  // --- chunking ---
+  chunkBtn.addEventListener("click", async () => {
+    if (!selectedFile) return;
+
+    chunkBtn.disabled = true;
+    setStatus("Chunking document...", "");
+    summary.style.display = "none";
+    chunksContainer.innerHTML = "";
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+    const overlap = document.getElementById("overlapWords").value;
+    if (overlap && parseInt(overlap) > 0) {
+      formData.append("overlap_words", overlap);
+    }
+
+    try {
+      const res = await fetch("/chunk", { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setStatus("Error " + res.status + ": " + (data.error || "Unknown error"), "error");
+        chunkBtn.disabled = false;
+        return;
+      }
+
+      renderChunks(data);
+      chunkBtn.disabled = false;
+      setStatus("Done — " + data.length + " chunks produced.", "success");
+
+    } catch (err) {
+      setStatus("Request failed: " + err.message, "error");
+      chunkBtn.disabled = false;
+    }
+  });
+
+  function renderChunks(chunks) {
+    if (chunks.length === 0) {
+      setStatus("No chunks returned.", "error");
+      return;
+    }
+
+    const docType = chunks[0].doc_type || "unknown";
+    const totalTokens = chunks.reduce((s, c) => s + (c.token_count || 0), 0);
+
+    document.getElementById("statDocType").textContent = docType;
+    document.getElementById("statChunks").textContent = chunks.length;
+    document.getElementById("statTokens").textContent = totalTokens.toLocaleString();
+    document.getElementById("statFile").textContent = chunks[0].filename || selectedFile.name;
+    summary.style.display = "flex";
+
+    chunksContainer.innerHTML = "";
+    chunks.forEach(chunk => {
+      const el = document.createElement("div");
+      el.className = "chunk";
+
+      const part = chunk.metadata && chunk.metadata.part ? chunk.metadata.part : null;
+
+      el.innerHTML =
+        "<div class=\"chunk-header\">" +
+          "<span class=\"chunk-id\">#" + chunk.id + "</span>" +
+          "<span class=\"chunk-section\">" + escHtml(chunk.section) + "</span>" +
+          "<div class=\"chunk-meta\">" +
+            "<span class=\"tag doc-type\">" + escHtml(chunk.doc_type) + "</span>" +
+            "<span class=\"tag tokens\">" + (chunk.token_count || 0) + " tokens</span>" +
+            (part ? "<span class=\"tag part\">" + escHtml(part) + "</span>" : "") +
+          "</div>" +
+        "</div>" +
+        "<div class=\"chunk-text\">" + escHtml(chunk.text) + "</div>";
+
+      chunksContainer.appendChild(el);
+    });
+  }
+
+  function setStatus(msg, type) {
+    statusBar.textContent = msg;
+    statusBar.className = "status-bar" + (type ? " " + type : "");
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+</script>
+
+</body>
+</html>
